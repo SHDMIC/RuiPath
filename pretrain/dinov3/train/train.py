@@ -36,6 +36,7 @@ from dinov3.data import (
     CombinedDataLoader,
 )
 from dinov3.logging import MetricLogger, setup_logging
+from dinov3.logging.helpers import SmoothedValue
 from dinov3.train.cosine_lr_scheduler import CosineScheduler, linear_warmup_cosine_decay
 from dinov3.train.multidist_meta_arch import MultiDistillationMetaArch
 from dinov3.train.ssl_meta_arch import SSLMetaArch
@@ -431,6 +432,7 @@ def do_train(cfg, model, resume=False):
     logger.info("Starting training from iteration %d", start_iter)
     metrics_file = os.path.join(cfg.train.output_dir, "training_metrics.json")
     metric_logger = MetricLogger(delimiter="  ", output_file=metrics_file)
+    metric_logger.add_meter("lr", SmoothedValue(window_size=1, fmt="{value:.5e}"))
     # Manual garbage collection
     gc.disable()
     gc.collect()
@@ -464,7 +466,7 @@ def do_train(cfg, model, resume=False):
             return
 
         # Garbage collection (trigger manually so it happens on all ranks at the same time)
-        if (iteration + 1) % 150 == 0:
+        if (iteration + 1) % 1000 == 0:
             logger.info("Garbage collection")
             gc.collect()
 
@@ -623,13 +625,15 @@ def main(argv=None):
     logger.info(f"Model after distributed:\n{model}")
     if args.eval_only:
         model.init_weights()
-        iteration = (
-            model.get_checkpointer_class()(model, save_dir=cfg.train.output_dir)
-            .resume_or_load(cfg.MODEL.WEIGHTS, resume=not args.no_resume)
-            .get("iteration", -1)
-            + 1
-        )
-        return do_test(cfg, model, f"manual_{iteration}")
+        ckpt_dir = Path(cfg.train.output_dir, "ckpt").expanduser()
+        last_ckpt = find_latest_checkpoint(ckpt_dir)
+        # To select a fixed checkpoint, comment out the line above and uncomment:
+        # last_ckpt = ckpt_dir / "29999_keep"
+        if last_ckpt is None or not last_ckpt.is_dir():
+            raise FileNotFoundError(f"No training checkpoint found: {last_ckpt or ckpt_dir}")
+        process_subgroup = distributed.get_process_subgroup()
+        iteration = load_checkpoint(last_ckpt, model=model, process_group=process_subgroup)
+        return do_test(cfg, model=model, iteration=f"manual_{iteration}", process_group=process_subgroup)
     do_train(cfg, model, resume=not args.no_resume)
 
 

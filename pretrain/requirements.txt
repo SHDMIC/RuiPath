@@ -1,4 +1,5 @@
 ftfy
+h5py
 omegaconf
 regex
 scikit-learn

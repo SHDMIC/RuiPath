@@ -14,7 +14,7 @@ from torch import Tensor, nn
 import dinov3.distributed as distributed
 from dinov3.checkpointer import init_fsdp_model_from_checkpoint
 from dinov3.configs import get_default_config
-from dinov3.data import DataAugmentationDINO
+from dinov3.data import DataAugmentationDINO, RuiPathJitter
 from dinov3.fsdp.ac_compile_parallelize import ac_compile_parallelize
 from dinov3.layers.dino_head import DINOHead
 from dinov3.loss import DINOLoss, GramLoss, KoLeoLoss, KoLeoLossDistributed, iBOTPatchLoss
@@ -89,9 +89,9 @@ class SSLMetaArch(nn.Module):
             logger.info(
                 f"OPTIONS -- KOLEO -- distributed_loss_group_size: {cfg.dino.koleo_distributed_loss_group_size}"
             )
-            assert cfg.dino.koleo_distributed_replicas == 0, (
-                "Option `dino.koleo_distributed_replicas` is no longer supported"
-            )
+            assert (
+                cfg.dino.koleo_distributed_replicas == 0
+            ), "Option `dino.koleo_distributed_replicas` is no longer supported"
             self.koleo_loss = KoLeoLossDistributed(
                 topk=cfg.dino.koleo_topk,
                 loss_group_size=cfg.dino.koleo_distributed_loss_group_size,
@@ -105,9 +105,9 @@ class SSLMetaArch(nn.Module):
         logger.info(f"OPTIONS -- IBOT masking -- ibot_mask_ratio_tuple: {cfg.ibot.mask_ratio_min_max}")
         logger.info(f"OPTIONS -- IBOT masking -- ibot_mask_sample_probability: {cfg.ibot.mask_sample_probability}")
 
-        assert 0 <= cfg.ibot.mask_ratio_min_max[0] < cfg.ibot.mask_ratio_min_max[1] <= 1, (
-            "provide a valid cfg.ibot.mask_ratio_min_max"
-        )
+        assert (
+            0 <= cfg.ibot.mask_ratio_min_max[0] < cfg.ibot.mask_ratio_min_max[1] <= 1
+        ), "provide a valid cfg.ibot.mask_ratio_min_max"
         assert 0 <= cfg.ibot.mask_sample_probability <= 1, "provide a positive mask probability for ibot"
         logger.info(f"OPTIONS -- IBOT -- head_n_prototypes: {cfg.ibot.head_n_prototypes}")
         logger.info(f"OPTIONS -- IBOT -- head_bottleneck_dim: {cfg.ibot.head_bottleneck_dim}")
@@ -260,6 +260,17 @@ class SSLMetaArch(nn.Module):
                 f"OPTIONS -- global crops GRAM teacher resize antialias: {cfg.gram.global_teacher_resize_antialias}"
             )
 
+        self.smeka_perturbation = None
+        if cfg.smeka.perturbation.enabled:
+            self.smeka_perturbation = RuiPathJitter(
+                sigma=cfg.smeka.perturbation.sigma,
+                iters=cfg.smeka.perturbation.iters,
+                lr=cfg.smeka.perturbation.lr,
+                mean=cfg.crops.rgb_mean,
+                std=cfg.crops.rgb_std,
+            )
+            logger.info(f"OPTIONS -- SMEKA OD-space stain perturbation enabled: {self.smeka_perturbation}")
+
     def _setup_distillation(self):
         logger.info(f"Performing distillation from {self.cfg.distillation.full_cfg_path}")
 
@@ -369,9 +380,9 @@ class SSLMetaArch(nn.Module):
         n_masked_patches_tensor = data["n_masked_patches"].cuda(non_blocking=True)
 
         if self.has_gram_teacher:
-            assert "collated_gram_teacher_crops" in data, (
-                "no gram teacher crops in the data, have you set cfg.crops.gram_teacher_crops_size?"
-            )
+            assert (
+                "collated_gram_teacher_crops" in data
+            ), "no gram teacher crops in the data, have you set cfg.crops.gram_teacher_crops_size?"
             gram_teacher_crops = data["collated_gram_teacher_crops"].cuda(non_blocking=True)
         else:
             gram_teacher_crops = None
@@ -526,6 +537,11 @@ class SSLMetaArch(nn.Module):
         n_global_crops, B, rgb, H, W = global_crops.shape
         n_local_crops, B, rgb, H, W = local_crops.shape
 
+        # SMEKA OD-space stain perturbation on the second global crop
+        if self.smeka_perturbation is not None:
+            self.smeka_perturbation.to(global_crops.device)
+            global_crops[1] = self.smeka_perturbation(global_crops[1])
+
         global_crops = global_crops.flatten(0, 1)
 
         # Forward global and local crops through the student backbone jointly
@@ -616,6 +632,7 @@ class SSLMetaArch(nn.Module):
             local_weight = 1.0
 
         loss_dict["dino_local_loss_weight"] = local_weight
+        loss_dict["dino_local_scale"] = dino_local_scale
         loss_accumulator += self.dino_loss_weight * dino_local_scale * local_weight * dino_local_crops_loss
 
         # DINO global loss: compare post-head CLS tokens: student(global crops) vs. teacher(global crops)
@@ -625,6 +642,7 @@ class SSLMetaArch(nn.Module):
             ignore_diagonal=self.dino_global_ignore_diagonal,
         )
         loss_dict["dino_global_crops_loss"] = dino_global_crops_loss
+        loss_dict["dino_global_scale"] = dino_global_scale
         loss_accumulator += self.dino_loss_weight * dino_global_scale * dino_global_crops_loss
 
         # Koleo: regularize pre-head CLS tokens of student(global crops)

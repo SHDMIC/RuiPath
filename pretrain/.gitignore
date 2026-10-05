@@ -6,8 +6,6 @@ dist/
 **/.ipynb_checkpoints
 **/.ipynb_checkpoints/**
 
-**/notebooks
-
 # Ignore shell scripts
 *.sh
 
@@ -16,3 +14,9 @@ dist/
 
 # Ignore vscode directory
 .vscode/
+
+# Local runtime artifacts
+log/
+torchelastic_*/
+torchinductor_root/
+/1

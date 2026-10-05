@@ -1,23 +1,34 @@
 name: dinov3
 channels:
-  - defaults
+  - xformers
+  - pytorch
+  - https://mirrors.tuna.tsinghua.edu.cn/anaconda/pkgs/main
+  - nvidia
   - conda-forge
+  - defaults
 dependencies:
   - python=3.11
-  - omegaconf
+  - xformers::xformers=0.0.28.post3
+  - fvcore=0.1.5
+  - torchmetrics=1.7.1
+  - h5py
+  - iopath=0.1.10
+  - omegaconf=2.3.0
+  - ftfy
+  - regex
+  - scikit-learn
+  - termcolor
+  - pip
+  - nvitop
+  - mypy[reports]=1.17
+  - pylint=3.3.8
+  - ruff=0.12.8
+  - openslide=4.0.0
   - pip
   - pip:
-    - ftfy # needed for dino.txt
-    - iopath
-    - omegaconf
-    - pandas 
-    - regex # needed for dino.txt
-    - pandas
-    - scikit-learn
-    - scikit-learn-intelex
-    - submitit
-    - termcolor
-    - torch 
-    - torchvision 
+    - torch==2.6.0
+    - torchvision
     - torchmetrics
-    
+    - cuml-cu12
+    - --extra-index-url https://download.pytorch.org/whl/cu124
+    - --extra-index-url https://pypi.nvidia.com

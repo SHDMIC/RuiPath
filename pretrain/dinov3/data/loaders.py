@@ -10,7 +10,14 @@ from typing import Any, Callable, List, Optional, TypeVar
 import torch
 from torch.utils.data import Sampler
 
-from .datasets import ADE20K, CocoCaptions, ImageNet, ImageNet22k
+from .datasets import (
+    ADE20K,
+    CocoCaptions,
+    ImageNet,
+    ImageNet22k,
+    RuiPathH5Dataset,
+    RuiPathPlainDataset,
+)
 from .samplers import EpochSampler, InfiniteSampler, ShardedInfiniteSampler
 
 logger = logging.getLogger("dinov3")
@@ -51,7 +58,7 @@ def _parse_dataset_str(dataset_str: str):
 
     for token in tokens[1:]:
         key, value = token.split("=")
-        assert key in ("root", "extra", "split")
+        assert key in ("root", "extra", "split", "meta_csv", "meta_file")
         kwargs[key] = value
 
     if name == "ImageNet":
@@ -68,6 +75,10 @@ def _parse_dataset_str(dataset_str: str):
         class_ = CocoCaptions
         if "split" in kwargs:
             kwargs["split"] = CocoCaptions.Split[kwargs["split"]]
+    elif name == "RuiPathH5Dataset":
+        class_ = RuiPathH5Dataset
+    elif name == "RuiPathPlainDataset":
+        class_ = RuiPathPlainDataset
     else:
         raise ValueError(f'Unsupported dataset "{name}"')
 

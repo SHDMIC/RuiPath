@@ -126,6 +126,12 @@ multidistillation:
 hrft:  # non-hrft'd student
   enabled: false
   checkpoint_path: ""  # teacher_checkpoint path
+smeka:
+  perturbation:
+    enabled: false
+    sigma: 0.15
+    iters: 100
+    lr: 5.0e-3
 optim:
   epochs: 100
   optimizer: adamw

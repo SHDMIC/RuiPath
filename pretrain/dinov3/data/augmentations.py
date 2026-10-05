@@ -86,7 +86,7 @@ class DataAugmentationDINO(object):
         self.resize_gram_teacher = None  # Resize transform applied to crops for gram teacher
         if gram_teacher_crops_size is not None:
             # All resize transforms will do nothing if the crop size is already the desired size.
-            if gram_teacher_no_distortions:
+            if gram_teacher_no_distortions:  # this is only true for anchoring config
                 # When there a no distortions for the gram teacher crop, we can resize before the distortions.
                 # This is the preferred order, because it keeps the image size for the augmentations consistent,
                 # which matters e.g. for GaussianBlur.
@@ -131,12 +131,7 @@ class DataAugmentationDINO(object):
 
         global_transfo1_extra = GaussianBlur(p=1.0)
 
-        global_transfo2_extra = v2.Compose(
-            [
-                GaussianBlur(p=0.1),
-                v2.RandomSolarize(threshold=128, p=0.2),
-            ]
-        )
+        global_transfo2_extra = GaussianBlur(p=0.1)
 
         local_transfo_extra = GaussianBlur(p=0.5)
 
@@ -149,6 +144,7 @@ class DataAugmentationDINO(object):
             ]
         )
 
+        # share_color_jitter is default to false
         if self.share_color_jitter:
             self.color_jittering = color_jittering
             self.global_transfo1 = v2.Compose([resize_global, global_transfo1_extra, self.normalize])

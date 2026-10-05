@@ -275,6 +275,7 @@ def init_fsdp_model_from_checkpoint(
     if not Path(checkpoint_path).is_dir():  # PyTorch standard checkpoint
         logger.info(f"Loading pretrained weights from {checkpoint_path}")
         chkpt = torch.load(checkpoint_path, map_location="cpu")["teacher"]
+        logger.info(f"pretrained weights keys: {list(chkpt.keys())}")
         from torch.distributed.device_mesh import DeviceMesh, init_device_mesh
 
         if process_group is None:
@@ -287,7 +288,8 @@ def init_fsdp_model_from_checkpoint(
             world_mesh = DeviceMesh.from_group(process_group, "cuda")
         chkpt = {
             key: (
-                torch.distributed.tensor.distribute_tensor(tensor, world_mesh, src_data_rank=None)
+                # torch.distributed.tensor.distribute_tensor(v, world_mesh, src_data_rank=None)
+                torch.distributed.tensor.distribute_tensor(tensor, world_mesh)
                 if not any(key_not_sharded in key for key_not_sharded in keys_not_sharded)
                 else tensor
             )
