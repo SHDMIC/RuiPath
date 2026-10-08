@@ -125,22 +125,25 @@ torchrun \
   --output-dir /path/to/shared/outputs/ruipath_gram
 ```
 
-## SMEKA
+## RuiPath-Global (SMEKA)
 
-### Enable stain perturbation
+Use `dinov3/configs/ruipath/ruipath_global.yaml` for RuiPath-Global post-training. Set `train.dataset_path` to a RuiPathPlainDataset manifest of training image patches, `student.resume_from_teacher_chkpt` to the exported RuiPath-Local teacher checkpoint, and `gram.ckpt` to a Gram teacher checkpoint. Set `smeka.teachers` to the locally downloaded Virchow2, UNI2-h, and H-Optimus-1 checkpoints. Obtain these models under their respective licenses; their weights are not included in this repository.
 
-Both supplied RuiPath configurations leave stain perturbation disabled. To enable it in either stage, add the following block to that stage's YAML file:
+The configuration enables Gram anchoring, OD-space stain perturbation (`smeka.perturbation.enabled`), and SMEKA multi-teacher distillation. Replace all placeholder data and checkpoint paths before training.
 
-```yaml
-smeka:
-  perturbation:
-    enabled: true
-    sigma: 0.15
-    iters: 100
-    lr: 0.005
+Run on every node with the launch variables from the pretraining example above:
+
+```bash
+torchrun \
+  --nnodes="${NNODES}" \
+  --nproc_per_node="${NPROC_PER_NODE}" \
+  --node_rank="${NODE_RANK}" \
+  --master_addr="${MASTER_ADDR}" \
+  --master_port="${MASTER_PORT}" \
+  train.py \
+  --config-file dinov3/configs/ruipath/ruipath_global.yaml \
+  --output-dir /path/to/shared/outputs/ruipath_global
 ```
-
-Then use the corresponding multi-node launch command above. The perturbation acts on the student's second global crop. `sigma` controls stain concentration variation; `iters` and `lr` control the iterative stain decomposition.
 
 ## Export a teacher checkpoint
 

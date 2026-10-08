@@ -258,6 +258,7 @@ dependencies:
       - six==1.17.0
       - sortedcontainers==2.4.0
       - submitit==1.5.2
+      - timm==1.0.28
       - tblib==3.1.0
       - toolz==1.0.0
       - tornado==6.5

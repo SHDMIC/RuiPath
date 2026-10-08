@@ -5,6 +5,7 @@ regex
 scikit-learn
 submitit
 termcolor
+timm>=1.0.28
 torch
 torchmetrics
 torchvision

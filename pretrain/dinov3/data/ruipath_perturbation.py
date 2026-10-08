@@ -6,7 +6,7 @@ from torch.nn import functional as F
 EPSILON = 1e-9
 
 
-class RuiPathJitter:
+class RuiPathPerturbation:
     """OD-space stain perturbation"""
 
     def __init__(
@@ -83,12 +83,12 @@ class RuiPathJitter:
 
         # Log-normal channel-wise perturbation of the stain concentrations
         scale = self.sample_scale(batch_size)  # [B, 2, 1]
-        od_jittered = torch.bmm(stain_matrix, od_tensor * scale)  # [B, 3, P]
-        rgb_jittered = (255.0 * torch.pow(10.0, -od_jittered)).clamp_(0.0, 255.0)
-        rgb_jittered = rgb_jittered.reshape(batch_size, channel_size, height, width)
+        od_perturbed = torch.bmm(stain_matrix, od_tensor * scale)  # [B, 3, P]
+        rgb_perturbed = (255.0 * torch.pow(10.0, -od_perturbed)).clamp_(0.0, 255.0)
+        rgb_perturbed = rgb_perturbed.reshape(batch_size, channel_size, height, width)
 
         # Re-normalize to the training pipeline's input space
-        out = (rgb_jittered / 255.0 - self._mean) / self._std
+        out = (rgb_perturbed / 255.0 - self._mean) / self._std
         return out.to(dtype=image_dtype)
 
     def __repr__(self):

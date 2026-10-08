@@ -271,6 +271,7 @@ def init_fsdp_model_from_checkpoint(
     skip_load_keys: List[str] | None = None,
     keys_not_sharded: List[str] | None = None,
     process_group: dist.ProcessGroup = None,
+    strict_loading: bool = True,
 ):
     if not Path(checkpoint_path).is_dir():  # PyTorch standard checkpoint
         logger.info(f"Loading pretrained weights from {checkpoint_path}")
@@ -300,10 +301,11 @@ def init_fsdp_model_from_checkpoint(
                 key: tensor
                 for key, tensor in chkpt.items()
                 if not any(skip_load_key in key for skip_load_key in skip_load_keys)
-            }
+            },
+            strict=strict_loading,
         )
     else:  # DCP checkpoint
-        load_checkpoint(ckpt_dir=checkpoint_path, model=model, process_group=process_group)
+        load_checkpoint(ckpt_dir=checkpoint_path, model=model, process_group=process_group, strict_loading=strict_loading)
 
 
 # Initialize a standard non distributed PyTorch model from PyTorch standard checkpoint for evals

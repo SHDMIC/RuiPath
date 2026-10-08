@@ -11,6 +11,7 @@ from torch import nn
 from torchvision.transforms import v2
 
 from dinov3.data.transforms import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD, GaussianBlur, make_normalize_transform
+from dinov3.smeka_teachers import TEACHER_NORMALIZATION
 
 logger = logging.getLogger("dinov3")
 
@@ -32,6 +33,7 @@ class DataAugmentationDINO(object):
         horizontal_flips=True,
         mean=IMAGENET_DEFAULT_MEAN,
         std=IMAGENET_DEFAULT_STD,
+        smeka_teachers=(),
     ):
         self.global_crops_scale = global_crops_scale
         self.local_crops_scale = local_crops_scale
@@ -46,6 +48,16 @@ class DataAugmentationDINO(object):
         self.share_color_jitter = share_color_jitter
         self.mean = mean
         self.std = std
+        self.smeka_teachers = tuple(smeka_teachers)
+        self.smeka_teacher_transforms = {
+            name: v2.Compose([
+                v2.Resize(224, interpolation=v2.InterpolationMode.BICUBIC),
+                v2.ToImage(),
+                v2.ToDtype(torch.float32, scale=True),
+                make_normalize_transform(mean=TEACHER_NORMALIZATION[name][0], std=TEACHER_NORMALIZATION[name][1]),
+            ])
+            for name in self.smeka_teachers
+        }
 
         logger.info("###################################")
         logger.info("Using data augmentation parameters:")
@@ -176,6 +188,11 @@ class DataAugmentationDINO(object):
         global_crop_2 = self.resize_global_post_transf(global_crop_2_transf)
 
         output["global_crops"] = [global_crop_1, global_crop_2]
+        if self.smeka_teachers:
+            output["smeka_teacher_crops"] = {
+                name: [transform(im1_base), transform(im2_base)]
+                for name, transform in self.smeka_teacher_transforms.items()
+            }
 
         # global crops for teacher:
         if self.teacher_no_color_jitter:

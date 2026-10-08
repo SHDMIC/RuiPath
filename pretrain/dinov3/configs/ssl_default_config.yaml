@@ -127,6 +127,13 @@ hrft:  # non-hrft'd student
   enabled: false
   checkpoint_path: ""  # teacher_checkpoint path
 smeka:
+  enabled: false
+  teachers: {}
+  temperature: 0.1
+  loss_weight: 1.0
+  p2p_weight: 1.0
+  c2p_weight: 1.0
+  register_weight: 1.0
   perturbation:
     enabled: false
     sigma: 0.15

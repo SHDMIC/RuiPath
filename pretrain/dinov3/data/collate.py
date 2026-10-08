@@ -73,6 +73,14 @@ def collate_data_and_cast(
         "upperbound": upperbound,
         "n_masked_patches": torch.full((1,), fill_value=mask_indices_list.shape[0], dtype=torch.long),
     }
+    if "smeka_teacher_crops" in samples_list[0][0]:
+        out["collated_smeka_teacher_crops"] = {
+            name: torch.stack([
+                sample[0]["smeka_teacher_crops"][name][crop]
+                for crop in range(n_global_crops) for sample in samples_list
+            ])
+            for name in samples_list[0][0]["smeka_teacher_crops"]
+        }
     if collated_gram_teacher_crops is not None:
         out["collated_gram_teacher_crops"] = collated_gram_teacher_crops.to(dtype)
     return out
@@ -118,6 +126,11 @@ def get_batch_subset(collated_data_batch, divide_by):
         "upperbound": upperbound,
         "n_masked_patches": torch.full((1,), fill_value=mask_indices_list.shape[0], dtype=torch.long),
     }
+    if "collated_smeka_teacher_crops" in collated_data_batch:
+        new_batch["collated_smeka_teacher_crops"] = {
+            name: crops.unflatten(0, (2, old_bs)).narrow(1, 0, target_bs).flatten(0, 1)
+            for name, crops in collated_data_batch["collated_smeka_teacher_crops"].items()
+        }
 
     if "global_batch_size" in collated_data_batch.keys():
         new_batch["global_batch_size"] = collated_data_batch["global_batch_size"] // divide_by

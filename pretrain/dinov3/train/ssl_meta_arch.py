@@ -14,10 +14,13 @@ from torch import Tensor, nn
 import dinov3.distributed as distributed
 from dinov3.checkpointer import init_fsdp_model_from_checkpoint
 from dinov3.configs import get_default_config
-from dinov3.data import DataAugmentationDINO, RuiPathJitter
+from dinov3.data import DataAugmentationDINO, RuiPathPerturbation
 from dinov3.fsdp.ac_compile_parallelize import ac_compile_parallelize
 from dinov3.layers.dino_head import DINOHead
+from dinov3.layers.smeka_projection import SMEKAProjection
 from dinov3.loss import DINOLoss, GramLoss, KoLeoLoss, KoLeoLossDistributed, iBOTPatchLoss
+from dinov3.loss.smeka import SMEKALoss
+from dinov3.smeka_teachers import FrozenTeachers, TEACHER_DIMS
 from dinov3.models import build_model_from_cfg
 from dinov3.train.cosine_lr_scheduler import linear_warmup_cosine_decay
 from dinov3.train.param_groups import fuse_params_groups, get_params_groups_with_decay_fsdp
@@ -124,6 +127,21 @@ class SSLMetaArch(nn.Module):
         student_model_dict["ibot_head"] = ibot_head_class()
         teacher_model_dict["ibot_head"] = ibot_head_class()
         self.ibot_patch_loss = iBOTPatchLoss(cfg.ibot.head_n_prototypes)
+
+        self.smeka_enabled = cfg.smeka.enabled
+        if self.smeka_enabled:
+            names = list(cfg.smeka.teachers.keys())
+            if names != ["virchow2", "uni_v2", "H-optimus-1"]:
+                raise ValueError("SMEKA requires virchow2, uni_v2, H-optimus-1 in that order")
+            if cfg.student.n_storage_tokens < len(names):
+                raise ValueError("SMEKA requires one student register token per teacher")
+            student_model_dict["smeka_projections"] = SMEKAProjection([TEACHER_DIMS[name] for name in names], embed_dim)
+            self.smeka_loss = SMEKALoss(
+                temperature=cfg.smeka.temperature,
+                p2p_weight=cfg.smeka.p2p_weight,
+                c2p_weight=cfg.smeka.c2p_weight,
+                register_weight=cfg.smeka.register_weight,
+            )
 
         # Build student and teacher models
         self.student = nn.ModuleDict(student_model_dict)
@@ -262,7 +280,7 @@ class SSLMetaArch(nn.Module):
 
         self.smeka_perturbation = None
         if cfg.smeka.perturbation.enabled:
-            self.smeka_perturbation = RuiPathJitter(
+            self.smeka_perturbation = RuiPathPerturbation(
                 sigma=cfg.smeka.perturbation.sigma,
                 iters=cfg.smeka.perturbation.iters,
                 lr=cfg.smeka.perturbation.lr,
@@ -309,9 +327,11 @@ class SSLMetaArch(nn.Module):
         self.student.backbone.init_weights()
         self.student.dino_head.init_weights()
         self.student.ibot_head.init_weights()
+        if self.smeka_enabled:
+            self.student.smeka_projections.init_weights()
         self.dino_loss.init_weights()
         self.ibot_patch_loss.init_weights()
-        self.model_ema.load_state_dict(self.student.state_dict())
+        self.model_ema.load_state_dict(self.student.state_dict(), strict=False)
         if self.has_gram_teacher:
             if self.gram_ckpt is not None:
                 logger.info(f"Loading pretrained weights from {self.gram_ckpt}")
@@ -340,8 +360,9 @@ class SSLMetaArch(nn.Module):
                 skip_load_keys=["dino_loss.center", "ibot_patch_loss.center"],
                 keys_not_sharded=["backbone.rope_embed.periods", "qkv.bias_mask"],
                 process_group=distributed.get_process_subgroup(),
+                strict_loading=not self.smeka_enabled,
             )
-            self.model_ema.load_state_dict(self.student.state_dict())
+            self.model_ema.load_state_dict(self.student.state_dict(), strict=False)
         if self.cfg.distillation.enabled:
             if self.cfg.distillation.checkpoint_path != "ignore":
                 logger.info(f"Loading teacher to distil from : {self.cfg.distillation.checkpoint_path}")
@@ -357,6 +378,9 @@ class SSLMetaArch(nn.Module):
                 self.teacher.dino_head.init_weights()
                 self.teacher.ibot_head.init_weights()
             logger.info(f"Performing distillation from: {self.teacher}")
+        if self.smeka_enabled:
+            # Keep the three frozen backbones out of FSDP, EMA, and training checkpoints.
+            object.__setattr__(self, "_smeka_teachers", FrozenTeachers(self.cfg.smeka.teachers, torch.cuda.current_device()))
 
     def forward_backward(
         self, data, *, teacher_temp, iteration=0, **ignored_kwargs
@@ -405,6 +429,24 @@ class SSLMetaArch(nn.Module):
             mask_indices_list=mask_indices_list,
         )
 
+        smeka_loss = None
+        if self.smeka_enabled:
+            crops = {
+                name: batch.cuda(non_blocking=True)
+                for name, batch in data["collated_smeka_teacher_crops"].items()
+            }
+            teacher_features = self._smeka_teachers(crops)
+            projected_cls = self.student.smeka_projections([x["cls_token"] for x in teacher_features])
+            smeka_loss, smeka_terms = self.smeka_loss(
+                {
+                    "cls_token": student_global["cls_pre_head"].flatten(0, 1),
+                    "patch_tokens": student_global["patch_pre_head"].flatten(0, 1),
+                    "reg_tokens": student_global["reg_pre_head"].flatten(0, 1),
+                },
+                teacher_features,
+                projected_cls,
+            )
+
         # Gram output
         if self.gram_use_loss:
             gram_global = self.get_gram_teacher_output(
@@ -428,6 +470,10 @@ class SSLMetaArch(nn.Module):
             masks_weight=masks_weight,
             iteration=iteration,
         )
+        if smeka_loss is not None:
+            loss_accumulator = loss_accumulator + self.cfg.smeka.loss_weight * smeka_loss
+            loss_dict["smeka_loss"] = smeka_loss
+            loss_dict.update({f"smeka_{name}": value for name, value in smeka_terms.items()})
 
         self.backprop_loss(loss_accumulator)
 
@@ -728,6 +774,8 @@ class SSLMetaArch(nn.Module):
             student_param_list = []
             teacher_param_list = []
             for k in self.student.keys():
+                if k not in self.model_ema:
+                    continue
                 for ms, mt in zip(self.student[k].parameters(), self.model_ema[k].parameters()):
                     student_param_list += [ms]
                     teacher_param_list += [mt]
@@ -771,6 +819,7 @@ class SSLMetaArch(nn.Module):
             horizontal_flips=cfg.crops.horizontal_flips,
             mean=cfg.crops.rgb_mean,
             std=cfg.crops.rgb_std,
+            smeka_teachers=list(cfg.smeka.teachers.keys()) if cfg.smeka.enabled else (),
         )
 
     def get_maybe_fused_params_for_submodel(self, m: nn.Module):
